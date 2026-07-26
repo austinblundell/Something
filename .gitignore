@@ -1,3 +1,6 @@
 build/
 src/gen/
 __pycache__/
+
+# the built ROM is committed so it can be downloaded without a toolchain
+!gbhorizon.gb

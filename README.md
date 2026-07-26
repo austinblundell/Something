@@ -29,7 +29,7 @@ and lookup table into `src/gen/`. Nothing under `src/gen/` is hand-edited.
 | | |
 |---|---|
 | D-pad left/right | steer |
-| B | brake |
+| B | brake — you need it for the hairpins |
 | A / Start | start the race (on the car-select screen) |
 
 Throttle is automatic; you accelerate up to the car's top speed unless you are
@@ -49,10 +49,10 @@ build time and never touched again. Everything else is raster trickery:
 
 * **Curves** come from rewriting `SCX` on every one of the 96 road scanlines.
   The horizontal offset at a given scanline is `curve * shape(y)`, where
-  `shape()` rises quadratically from 0 at the bottom of the screen to 128 at
+  `shape()` rises quadratically from 0 at the bottom of the screen to 192 at
   the horizon. Rather than multiply once per scanline, `BuildScxTable` walks
   the screen bottom-to-top adding `curve` into a 16-bit accumulator once per
-  unit of `shape()` — 128 additions in total, emitted fully unrolled by the
+  unit of `shape()` — 192 additions in total, emitted fully unrolled by the
   generator. That is ~8 cycles per scanline instead of ~60.
 
 * **Forward motion** comes from rewriting `BGP` on every road scanline. Road
@@ -65,6 +65,45 @@ build time and never touched again. Everything else is raster trickery:
 
 Because no tile data changes at run time, the entire frame budget is free for
 physics, opponents and the HUD.
+
+## Why the road is 93px wide
+
+The background is 256px across and the screen window is 160px, so the road
+repeats every 256px. If the gap between repeats is narrower than the window,
+some scroll value will show the road at *both* screen edges at once. That gap
+is `256 - roadWidth`, so a road wider than 95px puts a hard ceiling on how far
+the curve may scroll before it visibly wraps — which is exactly what caps how
+tight a corner can be.
+
+Holding the road at 93px (half width 46) makes the gap 163px, wider than the
+window, so **no scroll value can ever show the road twice** and the curve
+offset becomes unbounded. That is what buys the hairpins: the road can sweep
+clean off the side of the screen. It also leaves grass either side, which is
+where roadside scenery will go.
+
+## Corners
+
+Track curvature is a byte per segment. Roughly:
+
+| magnitude | corner |
+|---|---|
+| ~40 | sweeper |
+| ~70 | proper corner |
+| 96+ | hairpin — sweeps the road off the screen edge |
+
+The warning icon reflects this: a single arrow for a normal corner, a doubled
+chevron for a hairpin.
+
+Curvature eases toward its target faster when the gap is large, otherwise a
+hairpin would still be unwinding when its segment ended. The comparison is
+done in biased (+128) space so the gap between two opposite curvatures cannot
+overflow a signed byte.
+
+Carrying speed doubles the centrifugal pull, so a hairpin has to be braked
+for. That is what makes the grip stat matter: the SPORTSTER is the fastest car
+and the only one that cannot hold a hairpin flat out — taken at full throttle
+it spends about a tenth of the lap on the grass, and braking for the tight
+stuff is worth roughly 11 units of average speed over not braking.
 
 ## Frame budget
 
@@ -81,7 +120,7 @@ the loop is deliberately cheap:
 | `BuildBgpTable` | ~10 lines |
 | `BuildOam` (opponents + sprites) | ~13 lines |
 
-Total ~41 of the 57 available lines. Two decisions bought most of that
+Total ~42 of the 57 available lines. Two decisions bought most of that
 headroom: opponents occupy one of 16 discrete lanes so their screen position is
 a `LaneTable[line][lane]` lookup instead of a software multiply, and opponent
 physics runs in the same walk that builds the sprite list.
@@ -121,3 +160,6 @@ tools/shot.py        headless PyBoy screenshot harness
 * Opponents are not depth-sorted against each other, so two cars at nearly the
   same distance can overlap in the wrong order for a frame.
 * No lap counter, timer or finish line — it is an endless road today.
+* Going off onto the grass drags you down to a crawl rather than stopping you;
+  the penalty is bigger than any car's acceleration, so draining it to zero
+  would strand you there with no way to drive back on.

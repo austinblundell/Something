@@ -17,8 +17,9 @@ DEF CH_ZERO        EQU 48 - 32
 DEF CH_LT          EQU 60 - 32
 DEF CH_GT          EQU 62 - 32
 
-DEF PLAYER_X_LIM   EQU 64        ; steering clamp, keeps SCX out of wrap range
-DEF OFFROAD_X      EQU 50        ; |playerX| past this and the tyres are on grass
+DEF PLAYER_X_LIM   EQU 56        ; steering clamp
+DEF OFFROAD_X      EQU 38        ; |playerX| past this and the tyres are on grass
+DEF OFFROAD_SPEED  EQU 36        ; crawl speed the grass drags you down to
 DEF NUM_ENEMIES    EQU 11
 DEF EN_SIZE        EQU 4
 DEF EN_RZL         EQU 0
@@ -447,24 +448,34 @@ UpdateDrive:
     sra a
     sra a                          ; curve / 4, sign preserved
     ld b, a
+    ld a, [wSpeed]
+    cp 64
+    jr c, .slowpull
+    sla b                          ; carrying speed doubles the pull, so a
+.slowpull                          ; hairpin has to be braked for
     ld a, [wDriftAcc]
     add b
-    ld [wDriftAcc], a
+    ; Spend *every* whole pixel the accumulator holds, not just one.  At
+    ; hairpin curvature the pull is worth several pixels a frame, and only
+    ; taking one would let the accumulator run away and wrap its sign.
     bit 7, a
     jr nz, .driftneg
+.driftpos
     cp 16
     jr c, .driftdone
     sub 16
-    ld [wDriftAcc], a
     dec c                          ; right-hand bend pushes you left
-    jr .driftdone
+    jr .driftpos
 .driftneg
-    cp 241                         ; > -15: not a whole pixel yet
+    cp 241                         ; -15..-1: no whole pixel left
     jr nc, .driftdone
+    bit 7, a                       ; adding 16 can carry us up past zero, and
+    jr z, .driftdone               ; the test above would never catch that
     add 16
-    ld [wDriftAcc], a
     inc c
+    jr .driftneg
 .driftdone
+    ld [wDriftAcc], a
 
     ; clamp to +/- PLAYER_X_LIM
     ld a, c
@@ -482,14 +493,16 @@ UpdateDrive:
     ld [wPlayerX], a
 
     ; --- grass costs you speed ----------------------------------------------
+    ; Bleed speed down to a crawl but never below it: the penalty is larger
+    ; than every car's acceleration, so draining to zero would strand you on
+    ; the grass with no way to drive back onto the tarmac.
     call AbsA
     cp OFFROAD_X + 1
     jr c, .onroad
     ld a, [wSpeed]
+    cp OFFROAD_SPEED + 1
+    jr c, .onroad
     sub 4
-    jr nc, .offset
-    xor a
-.offset
     ld [wSpeed], a
 .onroad
 
@@ -519,9 +532,11 @@ UpdateDrive:
     call SegCurve
     ld [wCurveTarget], a
 
-    ; ease wCurve toward the target (signed compare)
+    ; Ease wCurve toward the target.  Compared in biased (+128) space so the
+    ; gap between two far-apart curvatures cannot overflow a signed byte, and
+    ; stepped faster when that gap is large -- otherwise a hairpin would still
+    ; be unwinding when its segment ended.
     ld a, [wCurve]
-    ld b, a
     add $80
     ld c, a
     ld a, [wCurveTarget]
@@ -529,12 +544,27 @@ UpdateDrive:
     cp c
     ret z
     jr c, .down
-    inc b
+    sub c                          ; gap, exact and unsigned
+    cp 24
+    ld a, [wCurve]
+    jr c, .up1
+    add 3
+    jr .store
+.up1
+    inc a
     jr .store
 .down
-    dec b
+    ld b, a
+    ld a, c
+    sub b                          ; gap the other way
+    cp 24
+    ld a, [wCurve]
+    jr c, .dn1
+    sub 3
+    jr .store
+.dn1
+    dec a
 .store
-    ld a, b
     ld [wCurve], a
     ret
 
@@ -672,12 +702,12 @@ BuildOam:
     jr c, .writeback
     cp 17                          ; rz <  4352
     jr nc, .writeback
-    ld a, [wEnLatCur]              ; lane -> road units
-    add a
-    add a
-    add a
-    sub 60
-    ld b, a
+    ld a, [wEnLatCur]              ; lane -> pixels on the bottom scanline
+    ld c, a
+    ld b, 0
+    ld hl, LaneTable + LANE_BOTTOM
+    add hl, bc
+    ld b, [hl]
     ld a, [wPlayerX]
     sub b
     call AbsA
@@ -858,15 +888,25 @@ UpdateHud:
     ld b, 0                        ; 0 = none
     bit 7, a
     jr nz, .negcurve
+    cp 96
+    jr nc, .sharpR
     cp 32
     jr c, .haveArrow
     ld b, 2                        ; right
     jr .haveArrow
+.sharpR
+    ld b, 4                        ; hairpin right
+    jr .haveArrow
 .negcurve
     call AbsA
+    cp 96
+    jr nc, .sharpL
     cp 32
     jr c, .haveArrow
     ld b, 1                        ; left
+    jr .haveArrow
+.sharpL
+    ld b, 3                        ; hairpin left
 .haveArrow
     ld a, [wLastArrow]
     cp b
@@ -1174,11 +1214,14 @@ DmaRoutineEnd:
 ; =============================================================================
 SECTION "Data", ROM0
 
+; 32 segments of signed curvature, looping.  Roughly +/-40 is a sweeper,
+; +/-70 a proper corner, and anything past 96 is a hairpin that sweeps the
+; road off the side of the screen (and trips the doubled warning chevron).
 TrackData:
-    db   0,   0,  40,  64,  32,   0, -48, -72
-    db -40,   0,   0,  36,  64,  80,  40,   0
-    db -32, -64, -32,   0,  48,  72,  48,   0
-    db -40, -80, -56, -20,   0,  24,   0,   0
+    db   0,   0,  38,  70,  40,   0, -46, -80
+    db -50,   0,   0,  60, 110, 124,  90,  30
+    db   0, -40, -75,   0,  45, 100, 120, 115
+    db  60,   0, -60,-118,-124, -70,   0,   0
 
 ; maxSpeed, accel, steer, pad
 CarStats:
