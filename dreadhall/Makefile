@@ -18,6 +18,9 @@ $(BUILD)/$(NAME).o: $(ASM) $(DEPS) $(GEN)
 $(BUILD)/$(NAME).gb: $(BUILD)/$(NAME).o
 	rgblink -m $(BUILD)/$(NAME).map -n $(BUILD)/$(NAME).sym -o $@ $<
 	rgbfix -v -p 0xFF -t DREADHALL -i DRDH -m 0x19 $@
+	@# keep a checked-in copy of the playable ROM next to the source, so it
+	@# survives `make clean` and cannot drift from the code that built it
+	cp $@ $(NAME).gb
 
 clean:
 	rm -rf $(BUILD) $(SRC)/gen

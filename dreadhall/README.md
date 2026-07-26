@@ -5,11 +5,15 @@ assembly. Raycast 3D walls with distance shading, scaled enemy billboards,
 hitscan combat, pickups and a status bar — running at a steady 30 fps on
 1978-vintage hardware.
 
+**`dreadhall.gb` is the playable ROM** — checked in at the top of this folder,
+ready to drop into an emulator or a flash cart. To rebuild it:
+
 ```
-make            # builds build/dreadhall.gb
+make            # builds build/dreadhall.gb and refreshes ./dreadhall.gb
 ```
 
-Runs on real DMG hardware and any accurate emulator. Cartridge is MBC5, 64 KB.
+Runs on real DMG hardware and any accurate emulator. Cartridge is MBC5, 32 KB
+(two banks: code and tables in bank 0, artwork and level data in bank 1).
 
 ## Controls
 
