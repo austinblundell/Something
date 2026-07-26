@@ -151,16 +151,23 @@ class Canvas:
         return v0 + (v1 - v0) * t
 
     # -------------------------------------------------------------- noise
-    def noise(self, seed, cells=8, octaves=4, persistence=0.5):
-        """Fractal value noise in 0..1, smoothly interpolated."""
+    def noise(self, seed, cells=8, octaves=4, persistence=0.5, aspect=1.0):
+        """Fractal value noise in 0..1, smoothly interpolated.
+
+        `aspect` above 1 stretches the field horizontally.  Weather is not
+        isotropic: round noise reads as camouflage, while the same noise
+        stretched three to one reads as cloud.
+        """
         rng = np.random.default_rng(seed)
         total = np.zeros((self.h, self.w), dtype=np.float32)
         amp = 1.0
         norm = 0.0
         c = cells
         for _ in range(octaves):
+            # More rows than columns means finer vertical detail, which reads
+            # as features stretched along the horizon.
             gw = max(2, int(c))
-            gh = max(2, int(c * self.h / self.w)) if self.w else gw
+            gh = max(2, int(c * self.h / self.w * aspect)) if self.w else gw
             grid = rng.random((gh, gw)).astype(np.float32)
             up = Image.fromarray((grid * 255).astype(np.uint8), 'L')
             up = up.resize((self.w, self.h), Image.BICUBIC)

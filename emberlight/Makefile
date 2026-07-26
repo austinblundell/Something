@@ -18,6 +18,7 @@ RGBLINK ?= rgblink
 RGBFIX  ?= rgbfix
 
 ROM     := $(BUILD)/$(NAME).gb
+ROM_DMG := $(BUILD)/$(NAME)-dmg.gb
 OBJ     := $(BUILD)/main.o
 MAP     := $(BUILD)/$(NAME).map
 SYM     := $(BUILD)/$(NAME).sym
@@ -33,9 +34,9 @@ TOOL_DEPS := tools/gbart.py tools/gbfont.py tools/scenes.py tools/story.py \
 ASFLAGS  := -I $(SRC) -I $(SRC)/engine -I $(GEN) -Weverything -Wno-obsolete
 LINKFLAGS := -m $(MAP) -n $(SYM)
 
-.PHONY: all assets shots clean preview
+.PHONY: all assets shots clean preview dmg
 
-all: $(ROM)
+all: $(ROM) $(ROM_DMG)
 
 $(GEN)/manifest.inc: $(TOOL_DEPS)
 	@mkdir -p $(GEN)
@@ -55,6 +56,16 @@ $(ROM): $(OBJ)
 	@echo "  FIX   $@"
 	@$(RGBFIX) -v -p 0xFF -t "EMBERLIGHT" -i EMBL -k EM -m 0x19 -c -l 0x33 $@
 	@ls -l $@ | awk '{printf "  DONE  %s (%s bytes)\n", $$9, $$5}'
+
+# The same binary with the Game Boy Color flag cleared.  Useful for testing
+# the monochrome path: the boot ROM's hardware signature is what the engine
+# keys off, and emulators derive it from this flag.
+$(ROM_DMG): $(OBJ)
+	@echo "  LINK  $@"
+	@$(RGBLINK) -o $@ $<
+	@$(RGBFIX) -v -p 0xFF -t "EMBERLIGHT" -i EMBL -k EM -m 0x19 -l 0x33 $@
+
+dmg: $(ROM_DMG)
 
 preview:
 	@$(PYTHON) tools/preview.py

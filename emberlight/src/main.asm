@@ -62,7 +62,11 @@ Start:
     ld  a, 0
     call MemFill
 
-    ; Now that WRAM is quiet, record what hardware we woke up on.
+    ; Now that WRAM is quiet, record what hardware we woke up on: the boot
+    ; ROM leaves $11 in A on a Game Boy Color and $01 on a DMG.  Everything
+    ; colour-related keys off this, and so does the picture loader -- on a
+    ; DMG it must not write attribute maps, because there is no second VRAM
+    ; bank for them to land in.
     ldh a, [hBootA]
     cp  $11
     ld  a, 0
@@ -70,6 +74,8 @@ Start:
     inc a
 .notCGB:
     ld  [wIsCGB], a
+    xor a
+    ldh [rVBK], a
 
     ; MBC5: make bank 1 the default mapped bank.
     ld  a, 1

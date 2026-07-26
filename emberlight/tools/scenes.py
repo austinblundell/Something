@@ -178,27 +178,62 @@ def sine_poly(c, y_base, amp, freq, phase, shade, crest_shade=None,
     return ys
 
 
-def cloudscape(c, y0, y1, seed, cells=6, octaves=4,
-               thresholds=(0.60, 0.47), shades=(1, 2, 3), rim=None):
-    """Three-tone storm cloud masses.
+def cloudscape(c, y0, y1, seed, cells=9, octaves=3, aspect=3.2,
+               thresholds=(0.62, 0.50), shades=(1, 2, 3), rim=None,
+               pile=0.16, keep_sky=True):
+    """Layered storm cloud, thresholded into three flat tones.
 
-    Thresholding fractal noise gives hard organic edges that quantise cleanly,
-    instead of the fine grey fizz you get from dithering the noise directly.
+    Two things stop this reading as camouflage: the noise is stretched wide,
+    so masses run along the sky rather than sitting in it, and the threshold
+    is biased by height, so cloud piles up toward the horizon and thins out
+    overhead.  Flat tones also cost far fewer tiles than dithered noise.
     """
-    n = c.noise(seed, cells=cells, octaves=octaves)
+    n = c.noise(seed, cells=cells, octaves=octaves, aspect=aspect)
+    ys = np.arange(SCREEN_H, dtype=np.float32)[:, None]
+    t = np.clip((ys - y0) / max(1.0, y1 - y0), 0.0, 1.0)
+    bias = (0.5 - t) * pile * 2.0          # positive high up = less cloud
     inside = np.zeros((SCREEN_H, SCREEN_W), dtype=bool)
     inside[y0:y1] = True
+
     hi, mid = thresholds
-    c.flat(inside & (n > hi), shades[0])
-    c.flat(inside & (n > mid) & (n <= hi), shades[1])
-    c.flat(inside & (n <= mid), shades[2])
+    bright = inside & (n > (hi + bias))
+    midtone = inside & (n > (mid + bias)) & ~bright
+    c.flat(bright, shades[0])
+    c.flat(midtone, shades[1])
+    if not keep_sky:
+        c.flat(inside & ~bright & ~midtone, shades[2])
     if rim is not None:
-        # One-pixel bright edge along the top of the brightest masses.
-        core = inside & (n > hi)
-        above = np.zeros_like(core)
-        above[1:] = core[1:] & ~core[:-1]
+        above = np.zeros_like(bright)
+        above[1:] = bright[1:] & ~bright[:-1]
         c.flat(above, rim)
     return n
+
+
+def lantern(c, x, y, halo=16, strength=0.75, core=2):
+    """A small hard light with a tight halo.
+
+    A wide radial glow quantises into a grey lozenge; keeping the halo small
+    and the core pure white is what makes it read as a flame.
+    """
+    c.glow(x, y, halo, strength)
+    box = (x - core, y - core, x + core, y + core)
+    m = c.mask(lambda d: d.rectangle(box, fill=255))
+    c.flat(m, 0).no_dither(m)
+    ring = c.mask(lambda d: d.rectangle(
+        (x - core - 1, y - core - 1, x + core + 1, y + core + 1),
+        outline=255, width=1))
+    c.flat(ring & ~m, 1)
+    return c
+
+
+def light_path(c, x, y_top, y_bot, half_top=2, half_bot=13, strength=0.6,
+               blur=3.0):
+    """The column a light throws down open water toward the viewer."""
+    cov = c.soft_mask(lambda d: d.polygon(
+        [(x - half_top, y_top), (x + half_top, y_top),
+         (x + half_bot, y_bot), (x - half_bot, y_bot)], fill=255), blur=blur)
+    fade = c.grad_v(y_top, y_bot, strength, strength * 0.2)
+    return c.blend(cov * fade, L_WHITE)
 
 
 def person(c, x, y, h=22, shade=3, coat=True, lantern=None, face_right=True):
@@ -256,10 +291,9 @@ def s_storm():
     # Sea smashing against the rock: three overlapping swells plus spray.
     sine_poly(c, 118, 7, 0.075, 0.0, 2, crest_shade=0, amp2=3, freq2=0.21)
     sine_poly(c, 130, 6, 0.055, 2.1, 3, crest_shade=1, amp2=2, freq2=0.17)
-    spray = c.soft_mask(lambda d: d.ellipse((6, 88, 78, 132), fill=255), blur=6.0)
-    c.blend(spray * 0.55, L_WHITE)
-    c.snap(0.55, mask=(c.grad_v(88, 134, 1.0, 1.0) > 0.5) &
-           c.mask(lambda d: d.ellipse((6, 88, 78, 132), fill=255)))
+    spray = c.soft_mask(lambda d: d.ellipse((14, 100, 64, 128), fill=255), blur=4.0)
+    c.blend(spray * 0.45, L_WHITE)
+    c.snap(0.66, mask=c.mask(lambda d: d.ellipse((10, 96, 70, 132), fill=255)))
     sine_poly(c, 140, 4, 0.09, 1.0, 3, crest_shade=0)
 
     pal = np.zeros((SCREEN_H, SCREEN_W), dtype=np.uint8)
@@ -340,61 +374,68 @@ def s_lamproom():
 @scene('village', bgp=BGP_STD)
 def s_village():
     c = Canvas()
-    horizon = 76
-    c.L[:] = c.ramp_v([(0, 0.00), (40, 0.03), (54, 0.30), (75, 0.34)])
-    mx, my, mr = 44, 30, 15
-    c.glow(mx, my, 38, 0.16)
-    sea(c, horizon, seed=91, chop=0.07, glint_x=mx,
-        stops=[(horizon, 0.60), (horizon + 5, 0.34), (horizon + 26, 0.28),
-               (horizon + 46, 0.14), (SCREEN_H, 0.04)])
+    horizon = 62
+
+    # Value plan: black sky, a bright seam at the waterline, then broad dark
+    # water so the rooftops and the lantern have something to sit against.
+    c.L[:] = c.ramp_v([(0, 0.00), (30, 0.02), (44, 0.28), (61, 0.32)])
+    mx, my, mr = 40, 26, 14
+    c.glow(mx, my, 34, 0.14)
+    sea(c, horizon, seed=91, chop=0.06,
+        stops=[(horizon, 0.62), (horizon + 4, 0.32), (horizon + 30, 0.24),
+               (horizon + 56, 0.10), (SCREEN_H, 0.03)])
     c.snap(0.78)
     seam = c.mask(lambda d: d.rectangle((0, horizon - 2, SCREEN_W, horizon - 1), fill=255))
     c.flat(seam, 0).no_dither(seam)
-    c.stars(40, 55, y_max=42)
+    c.stars(44, 55, y_max=44)
+    c.waves(horizon + 3, SCREEN_H - 4, 52, 77, min_len=3, max_len=26)
+
     disc = c.mask(lambda d: d.ellipse((mx - mr, my - mr, mx + mr, my + mr), fill=255))
     c.flat(disc, 0).no_dither(disc)
-    c.flat(c.mask(lambda d: d.ellipse((mx - 7, my - 6, mx - 1, my, ), fill=255)) & disc, 1)
-    c.flat(c.mask(lambda d: d.ellipse((mx + 2, my + 3, mx + 9, my + 10), fill=255)) & disc, 1)
+    for box in ((mx - 7, my - 6, mx - 1, my), (mx + 2, my + 3, mx + 9, my + 10)):
+        c.flat(c.mask(lambda d, b=box: d.ellipse(b, fill=255)) & disc, 1)
+    light_path(c, mx, horizon, SCREEN_H, half_top=3, half_bot=22, strength=0.28)
 
-    # The far bluff, and the tower still standing on it.
-    sine_poly(c, 70, 3, 0.03, 0.6, 3, crest_shade=2, bottom=horizon + 1, amp2=2, freq2=0.11)
-    lamp = lighthouse(c, 138, 72, 30, 6, 4, lit=True, bands=((52, 57, 1),))
+    # The far point, still holding its light, small and a long way off.
+    sine_poly(c, horizon - 4, 2, 0.035, 0.6, 3, crest_shade=2,
+              bottom=horizon - 1, amp2=1, freq2=0.12)
+    lamp = lighthouse(c, 136, horizon - 3, horizon - 44, 5, 3, lit=True)
     lx, ly = lamp
-    beam(c, lx, ly, 14, 4, -20, strength=0.34, reach=170)
-    c.glow(lx, ly, 9, 0.9)
+    beam(c, lx, ly, 10, 3, -20, strength=0.26, reach=180)
+    c.glow(lx, ly, 8, 0.85)
 
-    # Rooftops: gables and a chimney poking through flat water.
-    def roof(x, w, h, y_water, shade=3, ridge=1):
-        c.poly([(x, y_water), (x + w // 2, y_water - h), (x + w, y_water)], shade)
-        c.line([(x, y_water), (x + w // 2, y_water - h)], ridge)
-        # Reflection: a few broken horizontal dashes under the eaves.
-        for i in range(1, 5):
-            yy = y_water + i * 2
+    # Rooftops. Each gets a bright waterline where it cuts the surface: that
+    # is what makes them read as standing in the water rather than on it.
+    def roof(x, w, hgt, y_water):
+        c.poly([(x, y_water), (x + w // 2, y_water - hgt), (x + w, y_water)], 3)
+        c.line([(x + 1, y_water - 1), (x + w // 2, y_water - hgt)], 1)
+        line = c.mask(lambda d: d.rectangle((x - 3, y_water, x + w + 3, y_water), fill=255))
+        c.flat(line, 0).no_dither(line)
+        for i in range(1, 4):
+            yy = y_water + i * 3
             if yy < SCREEN_H:
-                c.line([(x + 2 + i, yy), (x + w - 2 - i, yy)], 3)
+                c.line([(x + 3 + i * 2, yy), (x + w - 3 - i * 2, yy)], 3)
 
-    roof(10, 34, 15, 100)
-    roof(52, 26, 11, 92)
-    roof(96, 40, 18, 112)
-    c.rect((122, 84, 130, 96), 3)          # a chimney
-    c.line([(122, 84), (130, 84)], 1)
-    roof(4, 22, 9, 128)
+    roof(6, 40, 19, 96)
+    roof(58, 28, 13, 84)
+    roof(100, 46, 22, 108)
+    c.rect((128, 74, 137, 88), 3)                 # the forge chimney
+    c.line([(128, 74), (137, 74)], 1)
+    chim = c.mask(lambda d: d.rectangle((124, 88, 141, 88), fill=255))
+    c.flat(chim, 0).no_dither(chim)
 
-    # The boat, low in the water, lantern lit, the keeper rowing.
-    bx, by = 66, 130
-    c.poly([(bx - 22, by), (bx + 22, by), (bx + 16, by + 7), (bx - 16, by + 7)], 3)
-    c.line([(bx - 22, by), (bx + 22, by)], 1)
-    c.line([(bx - 20, by + 2), (bx - 34, by + 9)], 3)     # oar
-    c.line([(bx + 20, by + 2), (bx + 34, by + 9)], 3)
-    person(c, bx + 2, by, h=20, lantern=None)
-    c.glow(bx - 16, by - 12, 15, 0.9)
-    lant = c.mask(lambda d: d.rectangle((bx - 18, by - 15, bx - 14, by - 10), fill=255))
-    c.flat(lant, 0).no_dither(lant)
-    c.line([(bx - 16, by - 10), (bx - 16, by - 2)], 3)
+    # Her boat, close and low, with the lantern on the bow.
+    bx, by = 58, 132
+    c.poly([(bx - 30, by), (bx + 30, by - 2), (bx + 22, by + 9), (bx - 22, by + 9)], 3)
+    c.line([(bx - 30, by), (bx + 30, by - 2)], 1)
+    c.line([(bx - 27, by + 3), (bx - 44, by + 11)], 3)
+    figure_back(c, bx + 4, by, w=26, h=30, rim=1, light=-1)
+    lantern(c, bx - 26, by - 14, halo=17, strength=0.8, core=2)
+    c.line([(bx - 26, by - 11), (bx - 26, by - 1)], 3)
 
     pal = np.zeros((SCREEN_H, SCREEN_W), dtype=np.uint8)
-    pal[c.mask(lambda d: d.rectangle((bx - 26, by - 22, bx - 6, by + 4), fill=255))] = 1
-    pal[c.mask(lambda d: d.rectangle((lx - 7, ly - 7, lx + 7, ly + 7), fill=255))] = 1
+    pal[c.mask(lambda d: d.rectangle((bx - 36, by - 25, bx - 15, by + 4), fill=255))] = 1
+    pal[c.mask(lambda d: d.rectangle((lx - 6, ly - 6, lx + 6, ly + 6), fill=255))] = 1
     return c, pal, [PAL_SEA, PAL_LAMP], BGP_STD
 
 
@@ -457,30 +498,36 @@ def s_title():
     return c, pal, [PAL_MOONLIT, PAL_LAMP], BGP_STD
 
 
-def figure_back(c, x, base_y, w=26, h=42, shade=3, hood=True, rim=None):
+def figure_outline(x, base_y, w, h):
+    """One closed contour for a hooded figure seen from behind."""
+    hw = w // 2
+    head_w = max(5, w // 4)
+    head_h = int(head_w * 2.1)
+    hy = base_y - h
+    neck = hy + head_h
+    return [(x - hw, base_y),
+            (x - hw + 1, neck + 4),
+            (x - head_w - 2, neck + 1),
+            (x - head_w, hy + 5),
+            (x - head_w // 2, hy),
+            (x + head_w // 2, hy),
+            (x + head_w, hy + 5),
+            (x + head_w + 2, neck + 1),
+            (x + hw - 1, neck + 4),
+            (x + hw, base_y)]
+
+
+def figure_back(c, x, base_y, w=26, h=42, shade=3, rim=None, light=+1):
     """An over-the-shoulder silhouette: hood, shoulders, no face.
 
-    Reads instantly at Game Boy resolution and puts the player behind the
-    keeper's eyes, which is what these compositions are for.
+    The rim is drawn by stamping the same contour one pixel toward the light
+    and then the solid figure on top.  A flat black shape against a flat black
+    sky is invisible; that single lit edge is the whole read.
     """
-    hw = w // 2
-    head_w = max(6, w // 3)
-    head_h = int(head_w * 1.15)
-    hy = base_y - h
-    # Shoulders: a wide, slightly domed trapezoid.
-    c.poly([(x - hw, base_y), (x - hw + 2, hy + head_h + 3),
-            (x - head_w, hy + head_h - 1), (x + head_w, hy + head_h - 1),
-            (x + hw - 2, hy + head_h + 3), (x + hw, base_y)], shade)
-    if hood:
-        c.poly([(x - head_w, hy + head_h + 1), (x - head_w + 1, hy + 4),
-                (x - head_w // 2, hy), (x + head_w // 2, hy),
-                (x + head_w - 1, hy + 4), (x + head_w, hy + head_h + 1)], shade)
-    else:
-        c.ellipse((x - head_w, hy, x + head_w, hy + head_h), shade)
+    pts = figure_outline(x, base_y, w, h)
     if rim is not None:
-        # Light catching one shoulder and the edge of the hood.
-        c.line([(x + head_w - 1, hy + 5), (x + hw - 2, hy + head_h + 4),
-                (x + hw - 1, base_y)], rim)
+        c.poly([(px + light, py - 1) for (px, py) in pts], rim)
+    c.poly(pts, shade)
     return c
 
 
@@ -490,42 +537,36 @@ def figure_back(c, x, base_y, w=26, h=42, shade=3, hood=True, rim=None):
 @scene('signal', bgp=BGP_STD)
 def s_signal():
     c = Canvas()
-    horizon = 84
-    c.L[:] = c.ramp_v([(0, 0.02), (34, 0.10), (60, 0.30), (83, 0.34)])
-    cloudscape(c, 0, 66, seed=717, cells=6, octaves=3,
-               thresholds=(0.63, 0.50), shades=(1, 2, 3))
-    sea(c, horizon, seed=311, chop=0.08,
-        stops=[(horizon, 0.44), (horizon + 8, 0.30), (horizon + 26, 0.18),
-               (SCREEN_H, 0.04)])
-    c.snap(0.76)
+    horizon = 78
+    c.L[:] = c.ramp_v([(0, 0.00), (26, 0.02), (54, 0.26), (77, 0.30)])
+    cloudscape(c, 0, 74, seed=717, cells=10, aspect=3.6,
+               thresholds=(0.66, 0.555), shades=(1, 2), rim=0, pile=0.18)
+    sea(c, horizon, seed=311, chop=0.07,
+        stops=[(horizon, 0.50), (horizon + 6, 0.28), (horizon + 24, 0.16),
+               (SCREEN_H, 0.03)])
+    c.snap(0.78)
     seam = c.mask(lambda d: d.rectangle((0, horizon - 1, SCREEN_W, horizon - 1), fill=255))
     c.flat(seam, 1).no_dither(seam)
-    c.waves(horizon + 3, 118, 34, 313, min_len=3, max_len=18)
+    c.waves(horizon + 3, 116, 30, 313, min_len=3, max_len=18)
 
-    # The signal: one small hard light, and its long reach on the water.
-    sx, sy = 124, 79
-    c.glow(sx, sy, 22, 0.85)
-    core = c.mask(lambda d: d.rectangle((sx - 1, sy - 1, sx + 1, sy + 1), fill=255))
-    c.flat(core, 0).no_dither(core)
-    path = c.soft_mask(lambda d: d.polygon(
-        [(sx - 1, horizon), (sx + 2, horizon), (sx + 12, SCREEN_H), (sx - 11, SCREEN_H)],
-        fill=255), blur=3.0)
-    c.blend(path * c.grad_v(horizon, SCREEN_H, 0.55, 0.12), L_WHITE)
+    # The signal: one small hard light, and its long reach across the water.
+    sx, sy = 122, 74
+    light_path(c, sx, horizon, SCREEN_H - 6, half_top=2, half_bot=16, strength=0.55)
+    lantern(c, sx, sy, halo=15, strength=0.8, core=1)
 
-    # Baked rain behind the figure; sprites carry the moving layer.
-    for i in range(46):
+    for i in range(30):
         rng = np.random.default_rng(2200 + i)
         x = int(rng.integers(-6, SCREEN_W))
-        y = int(rng.integers(0, 110))
+        y = int(rng.integers(0, 104))
         c.line([(x, y), (x + 3, y + 8)], 0)
 
     # The prow of her father's boat, and her back filling the near frame.
-    c.poly([(0, SCREEN_H), (0, 122), (46, 112), (96, 118), (112, SCREEN_H)], 3)
-    c.line([(0, 122), (46, 112), (96, 118)], 1)
-    figure_back(c, 54, 126, w=44, h=62, rim=1)
+    c.poly([(0, SCREEN_H), (0, 126), (52, 114), (104, 121), (120, SCREEN_H)], 3)
+    c.line([(0, 126), (52, 114), (104, 121)], 1)
+    figure_back(c, 48, 128, w=46, h=64, rim=1, light=+1)
 
     pal = np.zeros((SCREEN_H, SCREEN_W), dtype=np.uint8)
-    pal[c.mask(lambda d: d.rectangle((sx - 10, sy - 10, sx + 10, sy + 10), fill=255))] = 1
+    pal[c.mask(lambda d: d.rectangle((sx - 9, sy - 9, sx + 9, sy + 9), fill=255))] = 1
     return c, pal, [PAL_STORM, PAL_LAMP], BGP_STD
 
 
@@ -535,50 +576,59 @@ def s_signal():
 @scene('rescue', bgp=BGP_STD)
 def s_rescue():
     c = Canvas()
-    horizon = 62
-    c.L[:] = c.ramp_v([(0, 0.03), (30, 0.12), (52, 0.32), (61, 0.34)])
-    cloudscape(c, 0, 50, seed=515, cells=6, octaves=3,
-               thresholds=(0.64, 0.51), shades=(1, 2, 3))
-    sea(c, horizon, seed=99, chop=0.10,
-        stops=[(horizon, 0.40), (horizon + 10, 0.30), (horizon + 34, 0.16),
-               (SCREEN_H, 0.05)])
-    c.snap(0.74)
-    c.waves(horizon + 2, 132, 44, 555, min_len=4, max_len=22)
+    horizon = 58
+    c.L[:] = c.ramp_v([(0, 0.00), (22, 0.03), (44, 0.26), (57, 0.30)])
+    cloudscape(c, 0, 54, seed=515, cells=10, aspect=3.4,
+               thresholds=(0.65, 0.545), shades=(1, 2), rim=0, pile=0.18)
+    sea(c, horizon, seed=99, chop=0.09,
+        stops=[(horizon, 0.52), (horizon + 8, 0.30), (horizon + 30, 0.18),
+               (SCREEN_H, 0.04)])
+    c.snap(0.76)
+    seam = c.mask(lambda d: d.rectangle((0, horizon - 1, SCREEN_W, horizon - 1), fill=255))
+    c.flat(seam, 1).no_dither(seam)
+    c.waves(horizon + 3, 128, 34, 555, min_len=4, max_len=22)
 
     # The point, far off on the left. The tower is a stump of black: no lamp.
-    c.poly([(0, horizon + 6), (10, horizon - 2), (22, horizon + 2), (30, horizon + 8),
-            (0, horizon + 14)], 3)
-    lighthouse(c, 13, horizon + 1, horizon - 30, 4, 3, lit=False)
+    c.poly([(0, horizon + 4), (12, horizon - 4), (26, horizon), (34, horizon + 7),
+            (0, horizon + 13)], 3)
+    lighthouse(c, 15, horizon - 1, horizon - 30, 4, 3, lit=False)
 
-    # Swell, drawn as two long crests so the boats sit in a trough.
-    sine_poly(c, 96, 8, 0.045, 0.4, 2, crest_shade=0, amp2=3, freq2=0.14)
-    sine_poly(c, 124, 7, 0.06, 2.4, 3, crest_shade=1, amp2=2, freq2=0.2)
+    # One long swell so the two boats sit in a trough rather than on a field
+    # of competing crests.
+    sine_poly(c, 92, 7, 0.040, 0.4, 2, crest_shade=0, amp2=3, freq2=0.13)
 
-    # Their boat, low and crowded, with the storm lantern they kept swinging.
-    bx, by = 96, 108
-    c.poly([(bx - 26, by), (bx + 26, by), (bx + 19, by + 8), (bx - 19, by + 8)], 3)
-    c.line([(bx - 26, by), (bx + 26, by)], 1)
-    for i, (dx, hh) in enumerate(((-16, 15), (-6, 18), (5, 16), (15, 13))):
-        person(c, bx + dx, by, h=hh)
-    c.glow(bx + 24, by - 20, 20, 0.95)
-    lant = c.mask(lambda d: d.rectangle((bx + 22, by - 23, bx + 27, by - 17), fill=255))
-    c.flat(lant, 0).no_dither(lant)
-    c.line([(bx + 24, by - 17), (bx + 24, by - 2)], 3)
+    # Their boat, crowded, with the storm lantern they kept swinging.
+    # A lit patch of water goes down first: four black figures on black water
+    # is a smudge, the same four against a pale trough is a rescue.
+    bx, by = 100, 104
+    behind = c.soft_mask(lambda d: d.ellipse((bx - 44, by - 34, bx + 46, by + 6),
+                                             fill=255), blur=5.0)
+    c.blend(behind * 0.40, L_WHITE)
+    c.snap(0.70, mask=c.mask(lambda d: d.ellipse(
+        (bx - 46, by - 36, bx + 48, by + 8), fill=255)))
+    c.poly([(bx - 28, by), (bx + 28, by - 1), (bx + 20, by + 9), (bx - 20, by + 9)], 3)
+    c.line([(bx - 28, by), (bx + 28, by - 1)], 1)
+    for (dx, hh) in ((-19, 17), (-7, 22), (6, 18), (18, 14)):
+        figure_back(c, bx + dx, by, w=10, h=hh, rim=1, light=+1)
+    lantern(c, bx + 26, by - 22, halo=19, strength=0.9, core=2)
+    c.line([(bx + 26, by - 19), (bx + 26, by - 3)], 3)
 
-    # Her boat, nearer, cutting in from the right of frame.
-    c.poly([(30, SCREEN_H), (36, 128), (100, 132), (140, 140), (150, SCREEN_H)], 3)
-    c.line([(36, 128), (100, 132), (140, 140)], 1)
-    figure_back(c, 62, 138, w=34, h=48, rim=1)
+    # Her boat, nearer and lower in frame, cutting in from the left.
+    sine_poly(c, 122, 6, 0.055, 2.4, 3, crest_shade=1, amp2=2, freq2=0.19)
+    c.poly([(0, SCREEN_H), (6, 126), (74, 131), (126, 140), (140, SCREEN_H)], 3)
+    c.line([(6, 126), (74, 131), (126, 140)], 1)
+    figure_back(c, 40, 136, w=36, h=52, rim=1, light=+1)
 
-    for i in range(40):
+    for i in range(30):
         rng = np.random.default_rng(3300 + i)
         x = int(rng.integers(-6, SCREEN_W))
-        y = int(rng.integers(0, 96))
+        y = int(rng.integers(0, 92))
         c.line([(x, y), (x + 4, y + 9)], 0)
 
     pal = np.zeros((SCREEN_H, SCREEN_W), dtype=np.uint8)
-    pal[c.mask(lambda d: d.rectangle((bx + 12, by - 32, bx + 34, by - 6), fill=255))] = 1
+    pal[c.mask(lambda d: d.rectangle((bx + 14, by - 34, bx + 38, by - 8), fill=255))] = 1
     return c, pal, [PAL_STORM, PAL_LAMP], BGP_STD
+
 
 
 # ==========================================================================
@@ -587,49 +637,50 @@ def s_rescue():
 @scene('vigil', bgp=BGP_STD)
 def s_vigil():
     c = Canvas()
-    horizon = 92
+    horizon = 88
 
-    # The lamp is directly overhead and out of frame, so the value plan runs
-    # bright at the top of the picture and falls away -- the exact opposite of
-    # the other night scenes, which is what sells "standing under the light".
-    c.L[:] = c.ramp_v([(0, 0.95), (14, 0.72), (26, 0.34), (44, 0.06),
-                       (68, 0.04), (80, 0.28), (91, 0.32)])
-    n = c.noise(808, cells=12, octaves=2)
-    band = c.grad_v(56, 84, 0.0, 1.0) * c.grad_v(84, 91, 1.0, 0.0)
-    c.add((n - 0.5) * band, 0.24)
-
-    sea(c, horizon, seed=421, chop=0.08,
-        stops=[(horizon, 0.52), (horizon + 6, 0.32), (horizon + 24, 0.20),
-               (SCREEN_H, 0.05)])
-    c.snap(0.76)
+    # We are standing on the gallery.  The lamp is directly overhead and out
+    # of frame, so it arrives as a black roof overhang across the top of the
+    # picture with light spilling out from under it -- not as a bright band,
+    # which just reads as a sunset.
+    c.L[:] = c.ramp_v([(0, 0.00), (34, 0.02), (62, 0.24), (87, 0.30)])
+    cloudscape(c, 24, 84, seed=808, cells=11, aspect=3.6,
+               thresholds=(0.74, 0.655), shades=(1, 2), rim=None, pile=0.26)
+    sea(c, horizon, seed=421, chop=0.07,
+        stops=[(horizon, 0.54), (horizon + 5, 0.30), (horizon + 20, 0.18),
+               (SCREEN_H, 0.04)])
+    c.snap(0.78)
     seam = c.mask(lambda d: d.rectangle((0, horizon - 1, SCREEN_W, horizon - 1), fill=255))
     c.flat(seam, 0).no_dither(seam)
-    c.waves(horizon + 3, 124, 26, 423, min_len=3, max_len=16)
+    c.stars(26, 99, y_max=30)
+    c.waves(horizon + 3, 116, 22, 423, min_len=3, max_len=16)
 
     # Far out: the signal, small and stubborn.
-    sx, sy = 132, 88
-    c.glow(sx, sy, 12, 0.7)
-    core = c.mask(lambda d: d.rectangle((sx, sy - 1, sx + 1, sy), fill=255))
-    c.flat(core, 0).no_dither(core)
+    sx, sy = 130, 84
+    lantern(c, sx, sy, halo=11, strength=0.7, core=1)
 
-    # Light spilling past the gallery roof, thrown out over the water.
-    beam(c, 60, 8, 4, 62, SCREEN_W + 20, strength=0.30, reach=210, blur=3.0)
-    beam(c, 96, 4, 4, 58, -24, strength=0.22, reach=150, blur=3.0)
+    # The two beams leaving the lamp room above us, and the underside of the
+    # gallery roof they pass beneath.
+    beam(c, 66, 4, 3, 46, SCREEN_W + 20, strength=0.34, reach=210, blur=3.0)
+    beam(c, 66, 4, 3, 34, -24, strength=0.22, reach=150, blur=3.0)
+    c.poly([(0, 0), (SCREEN_W, 0), (SCREEN_W, 12), (96, 17), (36, 15), (0, 9)], 3)
+    c.line([(0, 9), (36, 15), (96, 17), (SCREEN_W, 12)], 1)
 
-    # The gallery rail across the lower third, and her hands on it.
+    # The gallery rail in the near frame, and the keeper at it.
     c.rect((0, 118, SCREEN_W, 121), 3)
     c.rect((0, 136, SCREEN_W, 139), 3)
     for x in range(6, SCREEN_W, 13):
         c.rect((x, 120, x + 2, 138), 3)
     c.line([(0, 117), (SCREEN_W, 117)], 1)
 
-    figure_back(c, 46, 142, w=40, h=66, rim=1)
+    figure_back(c, 44, 142, w=42, h=68, rim=1, light=+1)
 
-    # A full-width band for the lit sky: no vertical attribute edges to give
+    # A full-width band for the lit sky, so no vertical attribute edge gives
     # the 8x8 colour grid away.
     pal = np.zeros((SCREEN_H, SCREEN_W), dtype=np.uint8)
     pal[0:24, :] = 1
     return c, pal, [PAL_MOONLIT, PAL_LAMP], BGP_STD
+
 
 
 # ==========================================================================

@@ -24,8 +24,17 @@ from pyboy import PyBoy
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 ROM = os.path.join(ROOT, 'build', 'emberlight.gb')
+# The monochrome build is the same code with the colour flag cleared, so an
+# emulator hands it the DMG hardware signature and the engine takes the
+# monochrome path -- which is what we actually want to photograph.
+ROM_DMG = os.path.join(ROOT, 'build', 'emberlight-dmg.gb')
 SYM = os.path.join(ROOT, 'build', 'emberlight.sym')
 SHOTS = os.path.join(ROOT, 'shots')
+
+# Mirrors defs.inc: the dialogue box layout and the menu cursor tile.
+TEXT_ROW = 14
+TEXT_COL = 1
+TILE_CURSOR = 176 + (ord(';') - 32)
 
 # Where the reticle should visit in the lamp room, in cursor coordinates,
 # with the hotspot that ends the segment last.
@@ -98,27 +107,32 @@ class Player:
                     self.examined_at = f
                     self.target += 1
 
+        elif self.menu_open():
+            # The branch. Move the cursor to the wanted option, then commit.
+            if self.choice == 'b' and self.var('wChoiceSel') == 0:
+                if (f % 12) < 4:
+                    want.add('down')
+            elif (f % 24) < 4:
+                want.add('a')
+                self.choice_made = True
+
         else:
             # Ordinary dialogue: tap A on a human cadence.
-            if not self.choice_made and self.var('wChoiceSel') is not None:
-                pass
             if (f % 40) < 3:
                 want.add('a')
 
-        # Steer the one branch in the story toward the requested ending.
-        if self.choice == 'b' and not self.choice_made:
-            if self.var('wBoxOpen') and 5200 < f < 5600 and (f % 40) in (10, 11):
-                want = {'down'}
-            if f > 5600:
-                self.choice_made = True
-
         self.set_buttons(want)
+
+    def menu_open(self):
+        """The two-option menu is the only place the cursor tile is on screen."""
+        return self.pb.memory[0x9800 + TEXT_ROW * 32 + TEXT_COL] == TILE_CURSOR
 
 
 def run(cgb=True, total_frames=20000, choice='a', settle=30,
         diff_threshold=7.0, min_gap=45, dialogue_delay=190):
     syms = load_symbols()
-    pb = PyBoy(ROM, window='null', cgb=cgb, sound_emulated=False)
+    pb = PyBoy(ROM if cgb else ROM_DMG, window='null', cgb=cgb,
+               sound_emulated=False)
     player = Player(pb, syms, choice)
 
     shots = []
