@@ -17,6 +17,21 @@ original DMG and in colour on a Game Boy Color, from the same ROM.
 
 ---
 
+## Play it
+
+Prebuilt ROMs are checked in — no toolchain needed. Download one and open it
+in any Game Boy emulator, or put it on a flashcart.
+
+| file | |
+|---|---|
+| [`release/emberlight.gb`](release/emberlight.gb) | **start here** — colour on a Game Boy Color, four shades on an original Game Boy |
+| [`release/emberlight-dmg.gb`](release/emberlight-dmg.gb) | the same binary with the colour flag cleared, so emulators run it in monochrome even on a GBC |
+
+`release/checksums.md5` covers both. Rebuild them from source with
+`make release`.
+
+---
+
 ## Building
 
 Needs [RGBDS](https://rgbds.gbdev.io/) 0.9+ and Python 3 with `numpy` and

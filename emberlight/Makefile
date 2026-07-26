@@ -34,7 +34,7 @@ TOOL_DEPS := tools/gbart.py tools/gbfont.py tools/scenes.py tools/story.py \
 ASFLAGS  := -I $(SRC) -I $(SRC)/engine -I $(GEN) -Weverything -Wno-obsolete
 LINKFLAGS := -m $(MAP) -n $(SYM)
 
-.PHONY: all assets shots clean preview dmg
+.PHONY: all assets shots clean preview dmg release
 
 all: $(ROM) $(ROM_DMG)
 
@@ -66,6 +66,15 @@ $(ROM_DMG): $(OBJ)
 	@$(RGBFIX) -v -p 0xFF -t "EMBERLIGHT" -i EMBL -k EM -m 0x19 -l 0x33 $@
 
 dmg: $(ROM_DMG)
+
+# Playable ROMs are checked in under release/ so the game can be downloaded
+# and run without installing a toolchain.  Regenerate them with `make release`
+# whenever the engine, the art or the script changes.
+release: $(ROM) $(ROM_DMG)
+	@mkdir -p release
+	@cp $(ROM) $(ROM_DMG) release/
+	@cd release && md5sum $(NAME).gb $(NAME)-dmg.gb > checksums.md5
+	@echo "  REL   release/$(NAME).gb, release/$(NAME)-dmg.gb"
 
 preview:
 	@$(PYTHON) tools/preview.py
