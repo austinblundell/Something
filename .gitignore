@@ -1,0 +1,4 @@
+emberlight/build/
+emberlight/assets/gen/
+__pycache__/
+*.pyc
