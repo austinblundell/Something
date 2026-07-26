@@ -1,6 +1,12 @@
+# Build output. The bare `build/` pattern matches at any depth, so it covers
+# the per-game build directories too.
 build/
 src/gen/
-__pycache__/
+emberlight/assets/gen/
 
-# the built ROM is committed so it can be downloaded without a toolchain
+__pycache__/
+*.pyc
+
+# Built ROMs are committed so the games can be downloaded without a toolchain.
 !gbhorizon.gb
+!emberlight/release/*.gb
