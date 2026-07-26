@@ -52,7 +52,7 @@ build time and never touched again. Everything else is raster trickery:
   `shape()` rises quadratically from 0 at the bottom of the screen to 192 at
   the horizon. Rather than multiply once per scanline, `BuildScxTable` walks
   the screen bottom-to-top adding `curve` into a 16-bit accumulator once per
-  unit of `shape()` — 128 additions in total, emitted fully unrolled by the
+  unit of `shape()` — 192 additions in total, emitted fully unrolled by the
   generator. That is ~8 cycles per scanline instead of ~60.
 
 * **Forward motion** comes from rewriting `BGP` on every road scanline. Road
