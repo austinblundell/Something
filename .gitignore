@@ -1,4 +1,12 @@
-emberlight/build/
+# Build output. The bare `build/` pattern matches at any depth, so it covers
+# the per-game build directories too.
+build/
+src/gen/
 emberlight/assets/gen/
+
 __pycache__/
 *.pyc
+
+# Built ROMs are committed so the games can be downloaded without a toolchain.
+!gbhorizon.gb
+!emberlight/release/*.gb
