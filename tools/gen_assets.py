@@ -30,16 +30,22 @@ ROAD_ROWS = ROAD_LINES // 8                 # 12 background rows
 ROW_FIRST = ROAD_TOP // 8                   # background row 6
 
 BG_CENTER = 128                # road centre in background space
-HALFW_MAX = 64                 # road half width at the bottom scanline
+# The background is 256px wide and the screen window is 160px.  Keeping the
+# road narrow enough that 256 - width >= 160 means no scroll value can ever
+# show the road twice, which in turn means the curve offset is unbounded and
+# the track can hairpin.
+HALFW_MAX = 46                 # road half width at the bottom scanline
 SCX_BASE = BG_CENTER - SCREEN_W // 2        # 48 -> road centred on screen
 
 # depth mapping: z(y) = ZC / (y - ZY0)
 ZC = 365700
 ZY0 = 23
 
-# curve accumulator: shape(y) runs 0 at the bottom to SHAPE_MAX at the horizon
-SHAPE_MAX = 128
-CURVE_LIMIT = 88               # |curve|; horizon offset in px == curve/2
+# curve accumulator: shape(y) runs 0 at the bottom to SHAPE_MAX at the horizon.
+# The horizon offset in pixels is curve * SHAPE_MAX / 256, so 192 lets a signed
+# byte reach +/-95px -- far enough to sweep the road clean off the screen edge.
+SHAPE_MAX = 192
+CURVE_LIMIT = 127
 
 PAL_SKY = 0xE4                 # sky band, standard ramp
 PAL_A = 0x38                   # grass w, asphalt dark, rumble black, dash w
@@ -375,24 +381,41 @@ def showcase_car(kind, w=56, h=40):
 
 
 # --------------------------------------------------------------- arrows -----
+def arrow_head(img, x0, reach):
+    """Solid triangle pointing right, tip at x0 + reach."""
+    for dx in range(reach + 1):
+        h = reach - dx
+        for dy in range(-h, h + 1):
+            y = 8 + dy
+            if 0 <= y < 16:
+                img[y][x0 + dx] = 3
+
+
 def arrow_tiles(bank):
-    """16x16 turn arrows (left, right) drawn as four BG tiles each."""
+    """16x16 turn arrows as four BG tiles each.
+
+    Order: left, right, sharp left, sharp right.  The doubled chevron warns
+    that the corner ahead is a hairpin rather than a sweeper.
+    """
     out = []
-    for direction in (-1, 1):
-        img = blank(16, 16)
-        rect(img, 2, 6, 9, 9, 3)                     # shaft
-        for dx in range(5):                          # solid triangular head
-            h = 4 - dx
-            for dy in range(-h, h + 1):
-                img[8 + dy][9 + dx] = 3
-        if direction < 0:
-            img = [list(reversed(r)) for r in img]
-        tiles = []
-        for ty in range(2):
-            for tx in range(2):
-                tile = [img[ty * 8 + j][tx * 8:tx * 8 + 8] for j in range(8)]
-                tiles.append(bank.add(tile))
-        out.append(tiles)
+    for sharp in (False, True):
+        for direction in (-1, 1):
+            img = blank(16, 16)
+            if sharp:
+                arrow_head(img, 1, 5)                # >> two chevrons
+                arrow_head(img, 8, 5)
+            else:
+                rect(img, 2, 6, 9, 9, 3)             # shaft
+                arrow_head(img, 9, 4)
+            if direction < 0:
+                img = [list(reversed(r)) for r in img]
+            tiles = []
+            for ty in range(2):
+                for tx in range(2):
+                    tile = [img[ty * 8 + j][tx * 8:tx * 8 + 8]
+                            for j in range(8)]
+                    tiles.append(bank.add(tile))
+            out.append(tiles)
     return out
 
 
@@ -512,6 +535,7 @@ def main():
         DEF FONT_BASE     EQU {font_map[' ']}
         DEF ARROW_L       EQU {arrows[0][0]}
         DEF ARROW_R       EQU {arrows[1][0]}
+        DEF LANE_BOTTOM   EQU {(ROAD_LINES - 1) * 16}
         """))
 
     write("bgtiles.inc", hdr + "BgTiles:\n" + db_lines(bg.blob()) +
